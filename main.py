@@ -10,7 +10,12 @@ load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Target bots to monitor
-TARGET_BOTS = {"instagrambot", "SaveMedia_bot"}
+try:
+    TARGET_BOTS = set(filter(bool, map(str.strip, os.getenv("TARGET_BOTS", "").split(","))))
+except Exception as e:
+    logger.error(f"Failed to parse TARGET_BOTS: {e}")
+    TARGET_BOTS = {"instagrambot", "SaveMedia_bot"}
+
 
 # Thresholds
 LENGTH_THRESHOLD = 150
