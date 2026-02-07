@@ -64,12 +64,24 @@ async def filter_bot_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Logic: Delete if it has Cyrillic AND (is long OR has buttons)
     if has_cyrillic and (is_long or has_buttons):
         try:
+            # Check if sender is an admin (bots can't delete admin messages)
+            if chat.type in ["group", "supergroup"] and user:
+                member = await chat.get_member(user.id)
+                if member.status in ["administrator", "creator"]:
+                    logger.info(f"Skipping deletion: @{username} is an admin.")
+                    return
+
             await msg.delete()
             reason = "Long" if is_long else "Buttons"
             source = "forward" if is_forward else f"bot @{username}"
-            logger.info(f"Deleted spam {source}. Reason: {reason} with Cyrillic.")
+            logger.info(
+                f"Successfully deleted spam {source}. Reason: {reason} with Cyrillic."
+            )
         except Exception as e:
             logger.error(f"Failed to delete message: {e}")
+            logger.error(
+                "Ensure the bot is an ADMIN with 'Delete Messages' permission."
+            )
 
 
 def main():
