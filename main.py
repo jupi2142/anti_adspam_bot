@@ -36,7 +36,6 @@ async def filter_bot_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
 
-    # Extract sender info
     user = update.effective_user
     chat = update.effective_chat
     username = user.username if user else None
@@ -45,12 +44,10 @@ async def filter_bot_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = msg.text or msg.caption or ""
     chat_info = f"[{chat.type} {chat.id}]" if chat else "[Unknown Chat]"
 
-    # Print all messages seen for debugging
     logger.info(
         f"Message in {chat_info} from @{username} ({display_name}): {text[:100]}{'...' if len(text) > 100 else ''}"
     )
 
-    # Check if sender is a target bot OR if the message is a forward
     is_from_target = username in TARGET_BOTS
     is_forward = bool(msg.forward_origin)
 
@@ -61,10 +58,8 @@ async def filter_bot_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_long = len(text) > LENGTH_THRESHOLD
     has_buttons = bool(msg.reply_markup and msg.reply_markup.inline_keyboard)
 
-    # Logic: Delete if it has Cyrillic AND (is long OR has buttons)
     if has_cyrillic and (is_long or has_buttons):
         try:
-            # Check if sender is an admin (bots can't delete admin messages)
             if chat.type in ["group", "supergroup"] and user:
                 member = await chat.get_member(user.id)
                 if member.status in ["administrator", "creator"]:
@@ -84,6 +79,118 @@ async def filter_bot_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+async def handle_bot_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles bot mentions in replies to delete Cyrillic messages from target bots."""
+    msg = update.effective_message
+    logger.info(
+        f"[MENTION] Handler called for message: {msg.message_id if msg else 'None'}"
+    )
+
+    if not msg:
+        logger.warning("[MENTION] No message found")
+        return
+
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
+        logger.warning(f"[MENTION] Missing chat={chat}, user={user}")
+        return
+
+    text = msg.text or msg.caption or ""
+    logger.info(f"[MENTION] From @{user.username}: {text[:50]}")
+    logger.info(f"[MENTION] Is reply: {msg.reply_to_message is not None}")
+
+    if not msg.reply_to_message:
+        logger.info("[MENTION] Not a reply, skipping")
+        return
+
+    bot_username = context.bot.username
+    logger.info(f"[MENTION] Bot username: @{bot_username}")
+    logger.info(f"[MENTION] Looking for: @{bot_username} in: {text.lower()}")
+
+    has_bot_mention = bot_username and f"@{bot_username}" in text.lower()
+    logger.info(f"[MENTION] Bot mentioned: {has_bot_mention}")
+
+    if not has_bot_mention:
+        logger.info("[MENTION] Bot not mentioned")
+        return
+
+    target_msg = msg.reply_to_message
+    target_user = target_msg.from_user
+    logger.info(
+        f"[MENTION] Target message from: @{target_user.username if target_user else 'None'}"
+    )
+
+    if not target_user:
+        logger.warning("[MENTION] No target user")
+        return
+
+    target_username = target_user.username
+    if target_username is None:
+        logger.warning("[MENTION] Target has no username")
+        return
+
+    logger.info(f"[MENTION] Target: @{target_username}, TARGET_BOTS: {TARGET_BOTS}")
+    logger.info(f"[MENTION] Is forward: {target_msg.forward_origin is not None}")
+
+    # Check if directly from target bot OR if it's a forward from target bot
+    is_from_target = target_username in TARGET_BOTS
+    is_forward_from_target = False
+
+    if target_msg.forward_origin:
+        forward_origin = target_msg.forward_origin
+        logger.info(f"[MENTION] Forward origin type: {type(forward_origin).__name__}")
+
+        # Get sender from forward origin
+        forward_user = getattr(forward_origin, "sender_user", None)
+        forward_chat = getattr(forward_origin, "sender_chat", None)
+
+        if forward_user and getattr(forward_user, "username", None):
+            forward_username = forward_user.username
+            logger.info(f"[MENTION] Forward from user: @{forward_username}")
+            is_forward_from_target = forward_username in TARGET_BOTS
+        elif forward_chat and getattr(forward_chat, "username", None):
+            forward_username = forward_chat.username
+            logger.info(f"[MENTION] Forward from chat: @{forward_username}")
+            is_forward_from_target = forward_username in TARGET_BOTS
+
+    logger.info(
+        f"[MENTION] Is from target: {is_from_target}, Is forward from target: {is_forward_from_target}"
+    )
+
+    if not is_from_target and not is_forward_from_target:
+        logger.info(f"[MENTION] Neither direct nor forwarded from TARGET_BOTS")
+        return
+
+    target_text = target_msg.text or target_msg.caption or ""
+    has_cyrillic = bool(CYRILLIC_PATTERN.search(target_text))
+    logger.info(f"[MENTION] Target text: {target_text[:50]}")
+    logger.info(f"[MENTION] Has Cyrillic: {has_cyrillic}")
+
+    if not has_cyrillic:
+        logger.info("[MENTION] No Cyrillic in target")
+        return
+
+    try:
+        if chat and chat.type in ["group", "supergroup"] and target_user:
+            target_member = await chat.get_member(target_user.id)
+            logger.info(f"[MENTION] Target status: {target_member.status}")
+            if target_member.status in ["administrator", "creator"]:
+                logger.info(f"[MENTION] Skipping: @{target_username} is admin")
+                return
+
+        logger.info(f"[MENTION] Deleting message from @{target_username}")
+        await target_msg.delete()
+        logger.info(f"[MENTION] Deleting request from @{user.username}")
+        await msg.delete()
+        logger.info(
+            f"[MENTION] SUCCESS: Deleted @{target_username}'s message by request of @{user.username}"
+        )
+    except Exception as e:
+        logger.error(f"[MENTION] FAILED: {e}")
+        logger.error(f"[MENTION] Exception type: {type(e).__name__}")
+
+
 def main():
     if not TOKEN:
         logger.error(
@@ -93,7 +200,9 @@ def main():
 
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Handle all messages (including those with media/captions)
+    mention_handler = MessageHandler(filters.ALL & ~filters.COMMAND, handle_bot_mention)
+    application.add_handler(mention_handler)
+
     spam_handler = MessageHandler(filters.ALL & ~filters.COMMAND, filter_bot_spam)
     application.add_handler(spam_handler)
 
