@@ -66,12 +66,17 @@ async def filter_bot_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Skipping deletion: @{username} is an admin.")
                     return
 
-            await msg.delete()
+            delete_result = await msg.delete()
             reason = "Long" if is_long else "Buttons"
             source = "forward" if is_forward else f"bot @{username}"
-            logger.info(
-                f"Successfully deleted spam {source}. Reason: {reason} with Cyrillic."
-            )
+            if delete_result:
+                logger.info(
+                    f"Successfully deleted spam {source}. Reason: {reason} with Cyrillic."
+                )
+            else:
+                logger.error(
+                    f"Delete returned False for {source}. Reason: {reason} with Cyrillic. Message may still exist."
+                )
         except Exception as e:
             logger.error(f"Failed to delete message: {e}")
             logger.error(
@@ -201,10 +206,10 @@ def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
     mention_handler = MessageHandler(filters.ALL & ~filters.COMMAND, handle_bot_mention)
-    application.add_handler(mention_handler)
+    application.add_handler(mention_handler, group=0)
 
     spam_handler = MessageHandler(filters.ALL & ~filters.COMMAND, filter_bot_spam)
-    application.add_handler(spam_handler)
+    application.add_handler(spam_handler, group=1)
 
     logger.info("Anti-Russian Spam Bot is starting...")
     logger.info(
